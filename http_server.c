@@ -234,6 +234,23 @@ static void http_connection_timeout(void *_conn)
 	__http_kill_connection(conn, 1);
 }
 
+static void http_connection_start_expecting_requests(struct http_connection *conn)
+{
+	iv_fd_set_handler_in(&conn->fd, http_connection_get_data);
+
+	/* set up request timeout */
+	iv_validate_now();
+	conn->timeout.expires = iv_now;
+	conn->timeout.expires.tv_sec += 10;
+	iv_timer_register(&(conn->timeout));
+}
+
+static void http_connection_stop_expecting_requests(struct http_connection *conn)
+{
+	iv_fd_set_handler_in(&conn->fd, NULL);
+	iv_timer_unregister(&conn->timeout);
+}
+
 static void http_get_connection(void *_sock)
 {
 	struct http_listening_socket *s = (struct http_listening_socket *)_sock;
@@ -265,19 +282,16 @@ static void http_get_connection(void *_sock)
 		IV_FD_INIT(&(conn->fd));
 		conn->fd.fd = fd;
 		conn->fd.cookie = (void *)conn;
-		conn->fd.handler_in = http_connection_get_data;
 		iv_fd_register(&(conn->fd));
 
 		IV_TIMER_INIT(&(conn->timeout));
-		iv_validate_now();
-		conn->timeout.expires = iv_now;
-		conn->timeout.expires.tv_sec += 10;
 		conn->timeout.handler = http_connection_timeout;
 		conn->timeout.cookie = (void *)conn;
-		iv_timer_register(&(conn->timeout));
 
 		conn->max_requests = max_requests_per_connection;
 		iv_list_add_tail(&(conn->list), &(s->connections));
+
+		http_connection_start_expecting_requests(conn);
 
 		return;
 	}
@@ -733,8 +747,7 @@ static void http_request_promote(struct http_request *req)
 
 	set_reset_mode(req->conn->fd.fd, 0);
 	req->conn->handling_request = 1;
-	iv_fd_set_handler_in(&(req->conn->fd), NULL);
-	iv_timer_unregister(&(req->conn->timeout));
+	http_connection_stop_expecting_requests(req->conn);
 	req->conn->max_requests--;
 
 	i = find_best_client(req->conn->sock, req);
@@ -1129,13 +1142,8 @@ int http_request_end_reply(struct http_request *req)
 
 		http_kill_request(req);
 		conn->handling_request = 0;
-
-		iv_fd_set_handler_in(&(conn->fd), http_connection_get_data);
-
-		iv_validate_now();
-		conn->timeout.expires = iv_now;
-		conn->timeout.expires.tv_sec += 10;
-		iv_timer_register(&(conn->timeout));
+		
+		http_connection_start_expecting_requests(conn);
 	} else {
 		http_kill_connection(req->conn);
 	}

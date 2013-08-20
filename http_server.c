@@ -188,8 +188,15 @@ static void destroy_http_socket(struct http_listening_socket *s)
 
 		conn = iv_list_entry(lh, struct http_connection, list);
 
-		iv_list_del_init(&conn->list);
-		conn->sock = NULL;
+		if (conn->handling_request) {
+			iv_list_del_init(&conn->list);
+			conn->sock = NULL;
+			conn->current->connection_close = 1;
+		}
+		else {
+			http_kill_connection(conn);
+		}
+
 	}
 
 	free(s);

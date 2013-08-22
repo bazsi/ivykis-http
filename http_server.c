@@ -387,7 +387,7 @@ static void http_attach_new_request(struct http_connection *conn)
 		req->conn = conn;
 		req->parse_ptr = 0;
 		req->read_ptr = 0;
-		req->end_ptr = sizeof(req->buf);
+		req->end_ptr = sizeof(req->inbuf);
 		req->done = 0;
 
 		conn->current = req;
@@ -401,7 +401,7 @@ static struct http_tuple *http_alloc_tuple(struct http_request *req)
 	tup = NULL;
 	if (req->read_ptr + sizeof(struct http_tuple) < req->end_ptr) {
 		req->end_ptr -= sizeof(struct http_tuple);
-		tup = (struct http_tuple *)(req->buf + req->end_ptr);
+		tup = (struct http_tuple *)(req->inbuf + req->end_ptr);
 		INIT_IV_LIST_HEAD(&(tup->list));
 	}
 
@@ -718,7 +718,7 @@ static void http_request_process_data(struct http_request *req)
 	int bytes_to_commit = 0;
 
 	while (!req->done) {
-		char *parse_head = req->buf + req->parse_ptr;
+		char *parse_head = req->inbuf + req->parse_ptr;
 		char *endline;
 		int bytes_left;
 		int line_size;
@@ -776,7 +776,7 @@ static void http_request_get_data(struct http_request *req)
 	char *ptr;
 	int size;
 
-	ptr = req->buf + req->read_ptr;
+	ptr = req->inbuf + req->read_ptr;
 	size = req->end_ptr - req->read_ptr;
 
 	bytes_left = recv(req->conn->fd.fd, ptr, size, MSG_PEEK);

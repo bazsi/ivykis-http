@@ -110,7 +110,7 @@ struct http_request
 	/* Internal state.  */
 	struct iv_list_head			list;
 	struct http_connection			*conn;
-	char					buf[MAXREQBUF];
+	char					inbuf[MAXREQBUF];
 	int					parse_ptr;
 	int					read_ptr;
 	int					end_ptr;

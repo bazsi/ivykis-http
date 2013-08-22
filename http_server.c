@@ -727,11 +727,8 @@ static void http_request_process_data(struct http_request *req)
 
 		endline = memchr(parse_head, '\n', bytes_left);
 		if (endline == NULL) {
-			endline = memchr(parse_head, '\r', bytes_left);
-			if (endline == NULL) {
-				bytes_to_commit += bytes_left;
-				break;
-			}
+			bytes_to_commit += bytes_left;
+			break;
 		}
 
 		line_size = endline - parse_head + 1;

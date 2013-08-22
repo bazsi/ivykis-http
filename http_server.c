@@ -221,8 +221,11 @@ static void __http_kill_connection(struct http_connection *conn, int cl)
 	if (conn->current)
 		http_kill_request(conn->current);
 	iv_fd_unregister(&(conn->fd));
-	if (cl)
+	if (cl) {
+		if (conn->handling_request)
+			shutdown(conn->fd.fd, SHUT_WR);
 		close(conn->fd.fd);
+	}
 
 	iv_list_del(&(conn->list));
 	free(conn);

@@ -109,7 +109,7 @@ static int create_socket(u_int32_t ip, u_int16_t port)
 		return -1;
 	}
 
-	if (listen(fd, 6) < 0) {
+	if (listen(fd, 512) < 0) {
 		close(fd);
 		return -1;
 	}
@@ -388,6 +388,8 @@ static void http_attach_new_request(struct http_connection *conn)
 		req->parse_ptr = 0;
 		req->read_ptr = 0;
 		req->end_ptr = sizeof(req->inbuf);
+		req->write_ptr = 0;
+		req->flush_ptr = 0;
 		req->done = 0;
 
 		conn->current = req;
@@ -819,9 +821,42 @@ static void http_connection_get_data(void *_conn)
 	http_request_get_data(conn->current);
 }
 
+static void http_connection_prepare_for_next_request(struct http_connection *conn, int force_close)
+{
+	int should_close = (conn->current->reply_mode == IV_HTTP_REPLY_CONNECTION_CLOSE) || force_close;
 
+	if (!should_close) {
+		http_kill_request(conn->current);
+		conn->handling_request = 0;
+		
+		http_connection_start_expecting_requests(conn);
+	} else {
+		http_kill_connection(conn);
+	}
+}
 
+static void http_connection_flush_data(void *_conn)
+{
+	struct http_connection *conn = (struct http_connection *) _conn;
+	struct http_request *req = conn->current;
+	int rc;
 
+	do {
+		rc = write(conn->fd.fd, req->outbuf + req->flush_ptr, req->write_ptr - req->flush_ptr);
+	} while (rc < 0 && errno == EINTR);
+	
+	if (rc < 0 && errno == EAGAIN)
+		return;
+	else if (rc < 0)
+		http_connection_prepare_for_next_request(conn, 1);
+	else {
+		req->flush_ptr += rc;
+		if (req->flush_ptr == req->write_ptr) {
+			http_connection_prepare_for_next_request(conn, 0);
+			iv_fd_set_handler_out(&conn->fd, NULL);
+		}
+	}
+}
 
 
 
@@ -1001,6 +1036,49 @@ static char *http_status_code_name(int numeric)
 	return "-";
 }
 
+static void http_request_defer_write(struct http_request *req, char *data, int data_len)
+{
+	if (req->write_ptr + data_len > sizeof(req->outbuf)) {
+		abort();
+	} else {
+		memcpy(req->outbuf + req->write_ptr, data, data_len);
+		req->write_ptr += data_len;
+	}
+}
+
+static void http_request_buffered_write(struct http_request *req, char *data, int data_len)
+{
+	int rc;
+
+	if (req->write_ptr > 0) {
+		http_request_defer_write(req, data, data_len);
+		return;
+	}
+
+	do {
+		rc = write(req->conn->fd.fd, data, data_len);
+	} while (rc < 0 && errno == EINTR);
+
+	if (rc < 0 && errno == EAGAIN)
+		http_request_defer_write(req, data, data_len);
+	else if (rc < 0) {
+		// @@@ handle error gracefully
+		;
+	}
+	else if (rc != data_len)
+		http_request_defer_write(req, data + rc, data_len - rc);
+}
+
+
+static void http_request_flush_output_and_prepare_for_next_request(struct http_request *req)
+{
+	if (req->write_ptr != req->flush_ptr)
+		iv_fd_set_handler_out(&req->conn->fd, http_connection_flush_data);
+	else
+		http_connection_prepare_for_next_request(req->conn, 0);
+}
+
+
 static void http_send_headers(struct http_request *req)
 {
 	char headers[1024];
@@ -1048,7 +1126,7 @@ static void http_send_headers(struct http_request *req)
 	}
 
 	strcat(headers, "\r\n");
-	write(req->conn->fd.fd, headers, strlen(headers));
+	http_request_buffered_write(req, headers, strlen(headers));
 }
 
 int http_request_start_reply(struct http_request *req)
@@ -1073,14 +1151,12 @@ int http_request_start_reply(struct http_request *req)
 // @@@ chunk buffering!!!
 int http_request_write(struct http_request *req, char *buf, size_t len)
 {
-	int ret;
-
 	if (req->reply_mode == IV_HTTP_REPLY_CHUNKED) {
 		char length[16];
 
 		snprintf(length, 16, "%x\r\n", (int)len);
-		write(req->conn->fd.fd, length, strlen(length));	// @@@
-	} else if (req->reply_mode == IV_HTTP_REPLY_CONTENT_LENGTH) {
+		http_request_buffered_write(req, length, strlen(length));
+	} else if (req->reply_mode == IV_HTTP_REPLY_CONTENT_LENGTH || (req->reply_mode == IV_HTTP_REPLY_CONNECTION_CLOSE && req->content_length >= 0)) {
 		int quotum = req->content_length - req->content_sent;
 		if (len > quotum) {
 			syslog(LOG_ALERT, "chopping http write %d->%d",
@@ -1089,15 +1165,15 @@ int http_request_write(struct http_request *req, char *buf, size_t len)
 		}
 	}
 
-	ret = write(req->conn->fd.fd, buf, len);
-	if (ret > 0) {
-		if (req->content_length != -1)
-			req->content_sent += ret;
-		if (req->reply_mode == IV_HTTP_REPLY_CHUNKED)
-			write(req->conn->fd.fd, "\r\n", 2);
-	}
+	http_request_buffered_write(req, buf, len);
 
-	return ret;
+	if (req->content_length != -1)
+		req->content_sent += len;
+
+	if (req->reply_mode == IV_HTTP_REPLY_CHUNKED)
+		http_request_buffered_write(req, "\r\n", 2);
+
+	return len;
 }
 
 static int fill(int fd, int bytes)
@@ -1123,38 +1199,24 @@ static int fill(int fd, int bytes)
 	return 0;
 }
 
+
 int http_request_end_reply(struct http_request *req)
 {
-	int should_close;
-
-	should_close = 0;
-
+	// @@@
+#if 0
 	if (req->content_length != -1)
 		should_close = fill(req->conn->fd.fd,
 			req->content_length - req->content_sent);
+#endif
 
 	switch (req->reply_mode) {
 	case IV_HTTP_REPLY_CHUNKED:
 		// @@@ implement proper trailer sending support?
-		write(req->conn->fd.fd, "0\r\n\r\n", 5);
-		break;
-
-	case IV_HTTP_REPLY_CONNECTION_CLOSE:
-		should_close = 1;
+		http_request_buffered_write(req, "0\r\n\r\n", 5);
 		break;
 	}
-
-	if (!should_close) {
-		struct http_connection *conn = req->conn;
-
-		http_kill_request(req);
-		conn->handling_request = 0;
-		
-		http_connection_start_expecting_requests(conn);
-	} else {
-		http_kill_connection(req->conn);
-	}
-
+	
+	http_request_flush_output_and_prepare_for_next_request(req);
 	return 0;
 }
 

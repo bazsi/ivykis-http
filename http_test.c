@@ -10,6 +10,8 @@ struct http_server
 static struct http_server server;
 static int count = 0;
 
+static void stop_server(void);
+
 static void
 request_arrived(void *cookie)
 {
@@ -20,17 +22,24 @@ request_arrived(void *cookie)
       fprintf(stderr, "Unable to dequeue HTTP request\n");
       return;
     }
-  printf("request has arrived\n%s %s\n", hr->method, hr->uri);
+//  printf("request has arrived\n%s %s\n", hr->method, hr->uri);
   
   http_request_set_status_code(hr, 200);
-  http_request_set_content_length(hr, 16);
   http_request_set_content_type(hr, "text/plain");
   http_request_set_server(hr, "My tiny little web server");
   http_request_start_reply(hr);
-  http_request_write(hr, "0123456789ABCDEF", 16);
+  http_request_set_content_length(hr, 128);
+  http_request_write(hr, "0123456789ABCDEF"
+  "0123456789ABCDEF"
+  "0123456789ABCDEF"
+  "0123456789ABCDEF"
+  "0123456789ABCDEF"
+  "0123456789ABCDEF"
+  "0123456789ABCDEF"
+  "0123456789ABCDEF", 128);
   http_request_end_reply(hr);
-  if (count++ == 4)
-    iv_quit();
+//  if (count++ == 4)
+//    stop_server();
 }
 
 static int
@@ -67,7 +76,7 @@ int main(int argc, char *argv[])
   if (start_server() < 0)
     return 1;
   iv_main();
-  stop_server();
+  // stop_server();
   iv_deinit();
   return 0;
 }

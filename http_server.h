@@ -79,6 +79,7 @@ struct http_request_interest
 #define IV_HTTP_REPLY_CONNECTION_CLOSE		2
 
 #define MAXREQBUF				4096
+#define MAXRESPBUF				4096
 
 #define IV_HTTP_VERSION_0_9			9
 #define IV_HTTP_VERSION_1_0			10
@@ -115,6 +116,9 @@ struct http_request
 	int					read_ptr;
 	int					end_ptr;
 	int					done;
+	char					outbuf[MAXRESPBUF];
+	int					write_ptr;
+	int					flush_ptr;
 };
 
 

@@ -797,7 +797,7 @@ static void http_request_get_data(struct http_request *req)
 	http_request_process_data(req);
 	if (req->done) {
 		http_request_promote(req);
-	} else if (req->read_ptr >= req->end_ptr) {
+	} else if (req->read_ptr > req->end_ptr) {
 		syslog(LOG_CRIT, "Attempted buffer overflow");
 		set_reset_mode(req->conn->fd.fd, 1);
 		http_kill_connection(req->conn);
